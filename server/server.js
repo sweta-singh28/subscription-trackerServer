@@ -5,7 +5,7 @@ const sendEmail = require("./email");
 
 const app = express();
 app.get("/", (_, res) => res.send("Server up"));
-
+/** testing the current git**/
 /** runs 9:00 AM IST daily */
 cron.schedule(
   "0 9 * * *",
