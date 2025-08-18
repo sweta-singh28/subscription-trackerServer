@@ -2,50 +2,84 @@ const express = require("express");
 const cron = require("node-cron");
 const db = require("./firebase");
 const sendEmail = require("./email");
-
+require("dotenv").config;
+const { Timestamp } = require("firebase-admin/firestore");
 const app = express();
+
+// Health-check route
 app.get("/", (_, res) => res.send("Server up"));
-/** testing the current git**/
-/** runs 9:00 AM IST daily */
-cron.schedule(
-  "0 9 * * *",
-  async () => {
-    const now = new Date();
-    const dayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    const in2Start = new Date(dayStart.getTime() + 2 * 24 * 60 * 60 * 1000);
-    const in3End = new Date(dayStart.getTime() + 4 * 24 * 60 * 60 * 1000 - 1);
 
-    try {
-      const q = await db
-        .collection("subscriptions")
-        .where("renewalDate", ">=", in2Start)
-        .where("renewalDate", "<=", in3End)
-        .get();
+/**
+ * Function that performs the reminder job
+ */
+async function runReminderJob() {
+  const now = new Date();
 
-      const jobs = [];
-      q.forEach((doc) => {
-        const s = doc.data();
-        const when = s.renewalDate.toDate
-          ? s.renewalDate.toDate()
-          : new Date(s.renewalDate);
+  try {
+    const subs = await db.collection("subscriptions").get();
+    const jobs = [];
+
+    for (const doc of subs.docs) {
+      const s = doc.data();
+      if (!s.renewDate) continue; // skip if missing
+
+      // Convert Firestore Timestamp -> JS Date
+      const renewDate = s.renewDate.toDate();
+
+      // Reminder should be 2 days before renewDate
+      const reminderDate = new Date(renewDate);
+      reminderDate.setDate(reminderDate.getDate() - 2);
+
+      // Check if today matches the reminder date
+      if (
+        now.getFullYear() === reminderDate.getFullYear() &&
+        now.getMonth() === reminderDate.getMonth() &&
+        now.getDate() === reminderDate.getDate()
+      ) {
+        const userRef = await db.collection("users").doc(s.userId).get();
+        if (!userRef.exists) continue;
+
+        const userEmail = userRef.data().email;
+
         jobs.push(
           sendEmail({
-            to: s.userEmail,
-            subject: `Reminder: ${s.name} renews on ${when.toDateString()}`,
-            text: `Hi! Your ${s.name} renews on ${when.toDateString()}.`,
+            to: userEmail,
+            subject: `Reminder: ${
+              s.name
+            } renews on ${renewDate.toDateString()}`,
+            text: `Hi! Your ${s.name} renews on ${renewDate.toDateString()}.`,
             html: `<p>Hi! Your <b>${
               s.name
-            }</b> renews on <b>${when.toDateString()}</b>.</p>`,
+            }</b> renews on <b>${renewDate.toDateString()}</b>.</p>`,
           })
         );
-      });
-      await Promise.all(jobs);
-      console.log(`Reminders sent: ${jobs.length}`);
-    } catch (e) {
-      console.error("Cron error:", e);
+      }
     }
-  },
-  { timezone: "Asia/Kolkata" }
-);
+
+    await Promise.all(jobs);
+    console.log(`Reminders sent: ${jobs.length}`);
+  } catch (e) {
+    console.error("Cron error:", e);
+  }
+}
+
+
+/**
+ * Schedule cron job
+ * Runs daily at 9:00 AM IST
+ */
+cron.schedule("0 9 * * *", runReminderJob, { timezone: "Asia/Kolkata" });
+
+/**
+ * Manual trigger for testing
+ */
+app.get("/test-cron", async (_, res) => {
+  try {
+    await runReminderJob();
+    res.send("Cron job executed manually!");
+  } catch (e) {
+    res.status(500).send("Error: " + e.message);
+  }
+});
 
 app.listen(5000, () => console.log("Server running on http://localhost:5000"));
