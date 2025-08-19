@@ -2,18 +2,42 @@ const express = require("express");
 const cron = require("node-cron");
 const db = require("./firebase");
 const sendEmail = require("./email");
-require("dotenv").config;
-const { Timestamp } = require("firebase-admin/firestore");
+require("dotenv").config();
+
 const app = express();
 
 // Health-check route
 app.get("/", (_, res) => res.send("Server up"));
 
 /**
- * Function that performs the reminder job
+ * Helper → compute next due date (monthly only)
+ */
+function getNextDueDate(baseDate, fromDate = new Date()) {
+  const d = new Date(baseDate);
+
+  // Use same day every month
+  const next = new Date(
+    fromDate.getFullYear(),
+    fromDate.getMonth(),
+    d.getDate()
+  );
+
+  // if already passed this month → go to next month
+  if (next < fromDate) {
+    next.setMonth(next.getMonth() + 1);
+  }
+
+  return next;
+}
+
+/**
+ * Cron reminder job
  */
 async function runReminderJob() {
   const now = new Date();
+  const dayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const in2Start = new Date(dayStart.getTime() + 2 * 24 * 60 * 60 * 1000);
+  const in3End = new Date(dayStart.getTime() + 4 * 24 * 60 * 60 * 1000 - 1);
 
   try {
     const subs = await db.collection("subscriptions").get();
@@ -21,36 +45,29 @@ async function runReminderJob() {
 
     for (const doc of subs.docs) {
       const s = doc.data();
-      if (!s.renewDate) continue; // skip if missing
+      const recurrence = s.recurrence || "monthly"; // ✅ default monthly
+      if (recurrence !== "monthly") continue; // safety, future-proof
 
-      // Convert Firestore Timestamp -> JS Date
-      const renewDate = s.renewDate.toDate();
+      const baseDate = s.renewDate.toDate
+        ? s.renewDate.toDate()
+        : new Date(s.renewDate);
 
-      // Reminder should be 2 days before renewDate
-      const reminderDate = new Date(renewDate);
-      reminderDate.setDate(reminderDate.getDate() - 2);
+      // calculate next due date dynamically (monthly)
+      const nextDue = getNextDueDate(baseDate, now);
 
-      // Check if today matches the reminder date
-      if (
-        now.getFullYear() === reminderDate.getFullYear() &&
-        now.getMonth() === reminderDate.getMonth() &&
-        now.getDate() === reminderDate.getDate()
-      ) {
+      if (nextDue >= in2Start && nextDue <= in3End) {
         const userRef = await db.collection("users").doc(s.userId).get();
         if (!userRef.exists) continue;
-
-        const userEmail = userRef.data().email;
+        const userData = userRef.data();
 
         jobs.push(
           sendEmail({
-            to: userEmail,
-            subject: `Reminder: ${
-              s.name
-            } renews on ${renewDate.toDateString()}`,
-            text: `Hi! Your ${s.name} renews on ${renewDate.toDateString()}.`,
+            to: userData.email,
+            subject: `Reminder: ${s.name} renews on ${nextDue.toDateString()}`,
+            text: `Hi! Your ${s.name} renews on ${nextDue.toDateString()}.`,
             html: `<p>Hi! Your <b>${
               s.name
-            }</b> renews on <b>${renewDate.toDateString()}</b>.</p>`,
+            }</b> renews on <b>${nextDue.toDateString()}</b>.</p>`,
           })
         );
       }
@@ -63,10 +80,8 @@ async function runReminderJob() {
   }
 }
 
-
 /**
- * Schedule cron job
- * Runs daily at 9:00 AM IST
+ * Schedule cron job → runs daily at 9:00 AM IST
  */
 cron.schedule("0 9 * * *", runReminderJob, { timezone: "Asia/Kolkata" });
 
@@ -82,4 +97,6 @@ app.get("/test-cron", async (_, res) => {
   }
 });
 
-app.listen(5000, () => console.log("Server running on http://localhost:5000"));
+app.listen(5000, () =>
+  console.log("🚀 Server running on http://localhost:5000")
+);
