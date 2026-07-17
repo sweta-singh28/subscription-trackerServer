@@ -1,2 +1,14 @@
+# Dependencies
+node_modules/
+server/node_modules/
+
+# Build
 /.dist
-server/serviceAccountKey.json.json
+
+# Secrets — NEVER commit these (belt-and-suspenders; also ignored in server/.gitignore)
+.env
+.env.*
+!.env.example
+serviceAccountKey.json
+serviceAccountKey*.json
+*serviceAccount*.json

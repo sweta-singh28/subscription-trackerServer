@@ -1,2 +1,13 @@
+# Secrets — NEVER commit these
 .env
+.env.*
+!.env.example
 serviceAccountKey.json
+serviceAccountKey*.json
+*serviceAccount*.json
+
+# Dependencies
+node_modules/
+
+# Logs
+*.log
